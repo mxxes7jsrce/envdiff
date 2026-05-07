@@ -1,15 +1,17 @@
+// Package formatter writes diff results to an io.Writer in the requested format.
 package formatter
 
 import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/user/envdiff/internal/diff"
 )
 
-// Format represents the output format for diff results.
+// Format enumerates supported output formats.
 type Format string
 
 const (
@@ -18,14 +20,7 @@ const (
 	FormatCSV  Format = "csv"
 )
 
-// jsonResult is the JSON-serializable representation of a diff result.
-type jsonResult struct {
-	MissingInLeft  []string            `json:"missing_in_left,omitempty"`
-	MissingInRight []string            `json:"missing_in_right,omitempty"`
-	Mismatched     map[string][2]string `json:"mismatched,omitempty"`
-}
-
-// Write formats the diff result in the requested format and writes it to w.
+// Write serialises result to w using the given format.
 func Write(w io.Writer, result diff.Result, format Format) error {
 	switch format {
 	case FormatJSON:
@@ -38,57 +33,60 @@ func Write(w io.Writer, result diff.Result, format Format) error {
 }
 
 func writeText(w io.Writer, result diff.Result) error {
-	for _, k := range result.MissingInLeft {
-		if _, err := fmt.Fprintf(w, "< missing: %s\n", k); err != nil {
-			return err
-		}
-	}
-	for _, k := range result.MissingInRight {
-		if _, err := fmt.Fprintf(w, "> missing: %s\n", k); err != nil {
-			return err
-		}
-	}
-	for k, v := range result.Mismatched {
-		if _, err := fmt.Fprintf(w, "~ mismatch: %s (%q vs %q)\n", k, v[0], v[1]); err != nil {
-			return err
+	keys := sortedKeys(result.MissingInRight, result.MissingInLeft, result.Mismatched)
+	for _, k := range keys {
+		switch {
+		case contains(result.MissingInRight, k):
+			fmt.Fprintf(w, "MISSING_IN_RIGHT  %s\n", k)
+		case contains(result.MissingInLeft, k):
+			fmt.Fprintf(w, "MISSING_IN_LEFT   %s\n", k)
+		default:
+			m := result.Mismatched[k]
+			fmt.Fprintf(w, "MISMATCH          %s  left=%s  right=%s\n", k, m.Left, m.Right)
 		}
 	}
 	return nil
 }
 
+type jsonEntry struct {
+	Key    string `json:"key"`
+	Status string `json:"status"`
+	Left   string `json:"left,omitempty"`
+	Right  string `json:"right,omitempty"`
+}
+
 func writeJSON(w io.Writer, result diff.Result) error {
-	out := jsonResult{
-		MissingInLeft:  result.MissingInLeft,
-		MissingInRight: result.MissingInRight,
-	}
-	if len(result.Mismatched) > 0 {
-		out.Mismatched = make(map[string][2]string, len(result.Mismatched))
-		for k, v := range result.Mismatched {
-			out.Mismatched[k] = v
+	var entries []jsonEntry
+	for _, k := range sortedKeys(result.MissingInRight, result.MissingInLeft, result.Mismatched) {
+		switch {
+		case contains(result.MissingInRight, k):
+			entries = append(entries, jsonEntry{Key: k, Status: "missing_in_right"})
+		case contains(result.MissingInLeft, k):
+			entries = append(entries, jsonEntry{Key: k, Status: "missing_in_left"})
+		default:
+			m := result.Mismatched[k]
+			entries = append(entries, jsonEntry{Key: k, Status: "mismatch", Left: m.Left, Right: m.Right})
 		}
+	}
+	if entries == nil {
+		entries = []jsonEntry{}
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(out)
+	return enc.Encode(entries)
 }
 
 func writeCSV(w io.Writer, result diff.Result) error {
-	if _, err := fmt.Fprintln(w, "type,key,left_value,right_value"); err != nil {
-		return err
-	}
-	for _, k := range result.MissingInLeft {
-		if _, err := fmt.Fprintf(w, "missing_in_left,%s,,\n", csvEscape(k)); err != nil {
-			return err
-		}
-	}
-	for _, k := range result.MissingInRight {
-		if _, err := fmt.Fprintf(w, "missing_in_right,%s,,\n", csvEscape(k)); err != nil {
-			return err
-		}
-	}
-	for k, v := range result.Mismatched {
-		if _, err := fmt.Fprintf(w, "mismatch,%s,%s,%s\n", csvEscape(k), csvEscape(v[0]), csvEscape(v[1])); err != nil {
-			return err
+	fmt.Fprintln(w, "key,status,left,right")
+	for _, k := range sortedKeys(result.MissingInRight, result.MissingInLeft, result.Mismatched) {
+		switch {
+		case contains(result.MissingInRight, k):
+			fmt.Fprintf(w, "%s,missing_in_right,,\n", csvEscape(k))
+		case contains(result.MissingInLeft, k):
+			fmt.Fprintf(w, "%s,missing_in_left,,\n", csvEscape(k))
+		default:
+			m := result.Mismatched[k]
+			fmt.Fprintf(w, "%s,mismatch,%s,%s\n", csvEscape(k), csvEscape(m.Left), csvEscape(m.Right))
 		}
 	}
 	return nil
@@ -99,4 +97,35 @@ func csvEscape(s string) string {
 		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 	}
 	return s
+}
+
+func contains(keys []string, key string) bool {
+	for _, k := range keys {
+		if k == key {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedKeys(slices ...interface{}) []string {
+	seen := map[string]struct{}{}
+	for _, s := range slices {
+		switch v := s.(type) {
+		case []string:
+			for _, k := range v {
+				seen[k] = struct{}{}
+			}
+		case map[string]diff.ValuePair:
+			for k := range v {
+				seen[k] = struct{}{}
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
