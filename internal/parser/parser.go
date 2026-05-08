@@ -51,7 +51,7 @@ func ParseFile(path string) (EnvMap, error) {
 func parseLine(line string) (string, string, error) {
 	idx := strings.IndexByte(line, '=')
 	if idx < 0 {
-		return "", "", fmt.Errorf("invalid line %q: missing '='")
+		return "", "", fmt.Errorf("invalid line %q: missing '='", line)
 	}
 
 	key := strings.TrimSpace(line[:idx])
@@ -74,4 +74,13 @@ func stripQuotes(s string) string {
 		}
 	}
 	return s
+}
+
+// Keys returns a slice of all keys present in the EnvMap.
+func (e EnvMap) Keys() []string {
+	keys := make([]string, 0, len(e))
+	for k := range e {
+		keys = append(keys, k)
+	}
+	return keys
 }
