@@ -72,3 +72,38 @@ func TestScore_String(t *testing.T) {
 		t.Errorf("expected B, got %s", s.String())
 	}
 }
+
+func TestCompute_GradeBoundaries(t *testing.T) {
+	tests := []struct {
+		name          string
+		matched, total int
+		wantGrade     string
+	}{
+		{"A boundary", 9, 10, "A"},  // 90
+		{"B boundary", 8, 10, "B"},  // 80
+		{"C boundary", 7, 10, "C"},  // 70
+		{"D boundary", 6, 10, "D"},  // 60
+		{"F boundary", 5, 10, "F"},  // 50
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			left := make(map[string]string, tt.total)
+			right := make(map[string]string, tt.total)
+			for i := 0; i < tt.matched; i++ {
+				key := string(rune('A' + i))
+				left[key] = "v"
+				right[key] = "v"
+			}
+			for i := tt.matched; i < tt.total; i++ {
+				key := string(rune('A' + i))
+				left[key] = "v"
+				right[key] = "different"
+			}
+			s := scorer.Compute(left, right)
+			if s.Grade != tt.wantGrade {
+				t.Errorf("expected grade %s, got %s (value=%d)", tt.wantGrade, s.Grade, s.Value)
+			}
+		})
+	}
+}
