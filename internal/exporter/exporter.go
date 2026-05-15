@@ -74,6 +74,21 @@ func exportJSON(w io.Writer, env map[string]string, keys []string) error {
 	return enc.Encode(ordered)
 }
 
+// ParseFormat converts a string to a known Format, returning an error if the
+// value is not recognised. An empty string resolves to FormatDotEnv.
+func ParseFormat(s string) (Format, error) {
+	switch Format(strings.ToLower(s)) {
+	case FormatDotEnv, "":
+		return FormatDotEnv, nil
+	case FormatShell:
+		return FormatShell, nil
+	case FormatJSON:
+		return FormatJSON, nil
+	default:
+		return "", fmt.Errorf("unsupported export format: %q", s)
+	}
+}
+
 func sortedKeys(m map[string]string) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
